@@ -586,4 +586,7 @@ typedef enum fs_display_flag
  */
 void display_filesystem(filesystem_t *fs, fs_display_flag_t flag);
 
+
+uint64_t combine_bytes_to_int(uint8_t *transfer, int start, int end, int size);
+
 #endif
