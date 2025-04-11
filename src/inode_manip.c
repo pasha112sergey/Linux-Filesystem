@@ -75,19 +75,19 @@ void put_index_into_index_dblock(filesystem_t *fs, dblock_index_t address_of_cla
     // //printf("dblocks: %2x %2x %2x %2x \n", first, second, third, fourth);
 }
 
-void write_to_dblock(filesystem_t *fs, int indx, byte *data, int start_index, size_t l)
+int write_to_dblock(filesystem_t *fs, int indx, byte *data, int start_index, size_t l)
 {
     int real_indx_claimed = (int) indx;
     int n = (int) l;
+    int count = 0;
     if(start_index < n)
     {
         int j = 0;
         for(int i = start_index; i < start_index+min(64, n-start_index); i++)
         {
-            
+            count++;
             fs->dblocks[real_indx_claimed + j] = data[i];
             j++;
-            // // // // // // // // // // // // display_filesystem(fs, DISPLAY_ALL);
         }
     }
     else
@@ -96,8 +96,11 @@ void write_to_dblock(filesystem_t *fs, int indx, byte *data, int start_index, si
         for(int i = 0; i < n - start_index; i++)
         {
             fs->dblocks[real_indx_claimed + j] = data[start_index + i];
+            count++;
         }
     }
+
+    return count;
 }
 
 
@@ -274,7 +277,6 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
     int read = 0;
     if (n >= inode->internal.file_size) n = inode->internal.file_size;
     
-    display_filesystem(fs, DISPLAY_ALL);
     if(offset <= 256)
     {
         int num_dblocks_used = calculate_necessary_dblock_amount(offset);
@@ -288,10 +290,8 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
         
         while(read < min(n, inode->internal.file_size) && index_in_dblock_array < 4)
         {
-            display_filesystem(fs, DISPLAY_ALL);
             while(read < min(n, inode->internal.file_size) && offset_within_dblock < 64)
             {
-                display_filesystem(fs, DISPLAY_ALL);
                 transfer[read] = fs->dblocks[inode->internal.direct_data[index_in_dblock_array] * 64 + offset_within_dblock];
                 offset_within_dblock++;
                 read++;
@@ -384,12 +384,235 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
 
 fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, void *buffer, size_t n)
 {
-    (void)fs;
-    (void)inode;
-    (void)offset;
-    (void)buffer;
-    (void)n;
-    return NOT_IMPLEMENTED;
+    byte *transfer = (byte *)buffer;
+    if(!fs || !inode || !buffer) return INVALID_INPUT;
+    if (offset > inode->internal.file_size) return INVALID_INPUT;
+    int num_to_reserve = (int) n - ((int) inode->internal.file_size - (int) offset);
+    if (num_to_reserve < 0)
+        num_to_reserve = 0;
+        
+    if (available_dblocks(fs) < calculate_necessary_dblock_amount(num_to_reserve)) return INSUFFICIENT_DBLOCKS;
+
+    // display_filesystem(fs, DISPLAY_ALL);
+
+    if(offset <= 256)
+    {
+        uint64_t i = 0;
+        int num_dblocks_used = calculate_necessary_dblock_amount(offset);
+        int num_dblocks_reserved = calculate_necessary_dblock_amount(inode->internal.file_size);
+        int index_in_dblock_array = num_dblocks_used-1;
+        if (offset == 0)
+            index_in_dblock_array = 0;
+        
+        int offset_within_dblock = offset % 64;
+        if(offset_within_dblock == 0 && num_dblocks_used > 0)
+            offset_within_dblock = 64;
+        
+        dblock_index_t curr = inode->internal.direct_data[index_in_dblock_array];
+
+        while(offset_within_dblock < 64 && i < n)
+        {
+            fs->dblocks[curr * 64 + offset_within_dblock] = (byte)((byte *)transfer)[i];
+            i++;
+            offset_within_dblock++;
+            display_filesystem(fs, DISPLAY_ALL);
+        }
+        index_in_dblock_array++;
+        offset_within_dblock = 0;
+        // ive now filled in the datablock that was last used.
+        while(index_in_dblock_array < 4 && i < n)
+        {
+            curr = inode->internal.direct_data[index_in_dblock_array];
+            while(offset_within_dblock < 64 && i < n)
+            {
+                fs->dblocks[curr * 64 + offset_within_dblock] = (byte)((byte *)transfer)[i];
+                i++;
+                offset_within_dblock++;
+                display_filesystem(fs, DISPLAY_ALL);
+            }
+            index_in_dblock_array++;
+            offset_within_dblock = 0;
+            if (index_in_dblock_array >= 4)
+                break;
+            // if need to reserve direct data blocks, reserve them
+            if(index_in_dblock_array > num_dblocks_reserved - 1)
+            {
+                dblock_index_t *address_of_claimed_block = cast_dblock_ptr(malloc(sizeof(dblock_index_t)));
+                claim_available_dblock(fs, address_of_claimed_block);
+                inode->internal.direct_data[index_in_dblock_array] = *address_of_claimed_block;
+                i+= write_to_dblock(fs, *address_of_claimed_block * 64, transfer, i, n);
+                if(i >= n) break;
+                display_filesystem(fs, DISPLAY_ALL);
+            }
+        }
+
+        //now, if i still have more data to write, i just do the same exact thing as in the else branch
+        if (i < n)
+        {
+            // int num_of_idx_dblocks = calculate_index_dblock_amount(offset);
+            if(inode->internal.file_size <= 256)
+            {
+                dblock_index_t *address_of_claimed_index_block = cast_dblock_ptr(malloc(sizeof(dblock_index_t)));
+                claim_available_dblock(fs, address_of_claimed_index_block);
+                inode->internal.indirect_dblock = *address_of_claimed_index_block;
+            }
+            dblock_index_t curr = inode->internal.indirect_dblock;
+            dblock_index_t curr_indx_block = curr;
+            display_filesystem(fs, DISPLAY_ALL);
+            printf("curr: %d\n", curr);
+
+            int num_indirect_dblocks = calculate_necessary_dblock_amount(offset) - 4 - calculate_index_dblock_amount(offset);
+            if(num_indirect_dblocks < 0)
+                num_indirect_dblocks = 0;
+
+            int offset_within_curr = num_indirect_dblocks % 15;
+
+            if (offset_within_curr != 0)
+                offset_within_curr-=1;
+
+            curr = get_ith_indirect_dblock(fs, curr_indx_block, offset_within_curr);
+            int num_allocated = (calculate_necessary_dblock_amount(inode->internal.file_size) - 4 - calculate_index_dblock_amount(inode->internal.file_size));
+            int blocks_used_by_offset = (calculate_necessary_dblock_amount(offset) - 4 - calculate_index_dblock_amount(offset));
+            if(blocks_used_by_offset < 0)
+                blocks_used_by_offset = 0;
+            while(i < n && blocks_used_by_offset < num_allocated)
+            {
+                for(; offset_within_curr < 15; offset_within_curr++)
+                {
+                    if(blocks_used_by_offset >= num_allocated) break;
+                    curr = get_ith_indirect_dblock(fs, curr_indx_block, offset_within_curr);
+                    i += write_to_dblock(fs, curr * 64, transfer, i, n);
+                    blocks_used_by_offset++;
+                    display_filesystem(fs, DISPLAY_ALL);
+                }
+
+                if (i < n && blocks_used_by_offset < num_allocated)
+                {
+                    curr_indx_block = get_next_idx_dblock(fs, curr_indx_block);
+                    offset_within_curr = 0;
+                    curr = get_ith_indirect_dblock(fs, curr_indx_block, offset_within_curr);
+                }
+                else break;
+            }
+
+            // now ive used all my allocated blocks, i must start allocating new data
+            while(i < n)
+            {
+                for(; offset_within_curr < 15; offset_within_curr++)
+                {
+                    // i reserve the space and write at most 64 bytes
+                    dblock_index_t *address_of_claimed_block = cast_dblock_ptr(malloc(sizeof(dblock_index_t)));
+                    claim_available_dblock(fs, address_of_claimed_block);
+                    put_index_into_index_dblock(fs, *address_of_claimed_block, curr_indx_block*64 + offset_within_curr*4);
+                    i += write_to_dblock(fs, *address_of_claimed_block * 64, transfer, i, n);
+                    if(i >= n) break;
+                    display_filesystem(fs, DISPLAY_ALL);
+                }
+                if (i < n)
+                {
+                    dblock_index_t *address_of_claimed_index_block = cast_dblock_ptr(malloc(sizeof(dblock_index_t)));
+                    claim_available_dblock(fs, address_of_claimed_index_block);
+                    put_index_into_index_dblock(fs, *address_of_claimed_index_block, curr_indx_block*64 + offset_within_curr*4);
+                    offset_within_curr = 0;
+                    curr_indx_block = *address_of_claimed_index_block;
+                    display_filesystem(fs, DISPLAY_ALL);
+                }
+                offset_within_curr = 0;
+                display_filesystem(fs, DISPLAY_ALL);
+            }
+        }
+    }
+    else
+    {
+        int num_of_idx_dblocks = calculate_index_dblock_amount(offset);
+        dblock_index_t curr = inode->internal.indirect_dblock;
+        num_of_idx_dblocks--;
+        while(num_of_idx_dblocks > 0)
+        {
+            curr = get_next_idx_dblock(fs, curr);
+            num_of_idx_dblocks--;
+        }
+        dblock_index_t curr_indx_block = curr;
+        display_filesystem(fs, DISPLAY_ALL);
+        printf("curr: %d\n", curr);
+
+        int num_indirect_dblocks = calculate_necessary_dblock_amount(offset) - 4 - calculate_index_dblock_amount(offset);
+        int offset_within_curr = num_indirect_dblocks % 15;
+        if (offset_within_curr != 0)
+            offset_within_curr-=1;
+
+        int offset_within_dblock = offset % 64;
+        if(offset_within_dblock == 0)
+            offset_within_dblock = 64;
+        
+        uint64_t i = 0;
+        curr = get_ith_indirect_dblock(fs, curr_indx_block, offset_within_curr);
+        while(offset_within_dblock < 64 && i < n)
+        {
+            fs->dblocks[curr * 64 + offset_within_dblock] = (byte)((byte *)transfer)[i];
+            i++;
+            offset_within_dblock++;
+            display_filesystem(fs, DISPLAY_ALL);
+        }
+        // now i filled in my last indirect dblock
+
+
+        offset_within_curr++;
+        int num_allocated = (calculate_necessary_dblock_amount(inode->internal.file_size) - 4 - calculate_index_dblock_amount(inode->internal.file_size));
+        int blocks_used_by_offset = (calculate_necessary_dblock_amount(offset) - 4 - calculate_index_dblock_amount(offset));
+
+        while(i < n && blocks_used_by_offset < num_allocated)
+        {
+            for(; offset_within_curr < 15; offset_within_curr++)
+            {
+                if(blocks_used_by_offset >= num_allocated) break;
+                curr = get_ith_indirect_dblock(fs, curr_indx_block, offset_within_curr);
+                i += write_to_dblock(fs, curr * 64, transfer, i, n);
+                blocks_used_by_offset++;
+                display_filesystem(fs, DISPLAY_ALL);
+            }
+
+            if (i < n && blocks_used_by_offset < num_allocated)
+            {
+                curr_indx_block = get_next_idx_dblock(fs, curr_indx_block);
+                offset_within_curr = 0;
+                curr = get_ith_indirect_dblock(fs, curr_indx_block, offset_within_curr);
+            }
+            else break;
+        }
+
+        // now ive used all my allocated blocks, i must start allocating new data
+        while(i < n)
+        {
+            for(; offset_within_curr < 15; offset_within_curr++)
+            {
+                // i reserve the space and write at most 64 bytes
+                dblock_index_t *address_of_claimed_block = cast_dblock_ptr(malloc(sizeof(dblock_index_t)));
+                claim_available_dblock(fs, address_of_claimed_block);
+                put_index_into_index_dblock(fs, *address_of_claimed_block, curr_indx_block*64 + offset_within_curr*4);
+                i += write_to_dblock(fs, *address_of_claimed_block * 64, transfer, i, n);
+                if(i >= n) break;
+                display_filesystem(fs, DISPLAY_ALL);
+            }
+            if (i < n)
+            {
+                dblock_index_t *address_of_claimed_index_block = cast_dblock_ptr(malloc(sizeof(dblock_index_t)));
+                claim_available_dblock(fs, address_of_claimed_index_block);
+                put_index_into_index_dblock(fs, *address_of_claimed_index_block, curr_indx_block*64 + offset_within_curr*4);
+                offset_within_curr = 0;
+                curr_indx_block = *address_of_claimed_index_block;
+                display_filesystem(fs, DISPLAY_ALL);
+            }
+            offset_within_curr = 0;
+            display_filesystem(fs, DISPLAY_ALL);
+        }
+    }
+    // (void)fs;
+    inode->internal.file_size += num_to_reserve;
+    // (void)offset;
+    // (void)buffer;
+    // (void)n;
+    return SUCCESS;
 
     //check to see if the input is valid
 
