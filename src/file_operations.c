@@ -337,30 +337,23 @@ int new_file(terminal_context_t *context, char *path, permission_t perms)
     size_t curr_size = curr_dir->inode->internal.file_size;
     inode_read_data(context->fs, curr_dir->inode, 0, curr_contents, curr_size, &curr_size);
     size_t write_offset = curr_size;  // Default to appending
-    for(size_t i = 0; i < curr_size; i += DIRECTORY_ENTRY_SIZE) {
-        // Debug print current entry
-        info(1, "Checking entry at offset %zu: [%02x %02x]\n", 
-             i, curr_contents[i], curr_contents[i+1]);
+    for(size_t i = 0; i < curr_size; i += 16) {
+        // Check all 16 bytes for zeros
+        int is_tombstone = 1;
+        for(int j = 0; j < 16; j++) {
+            if(curr_contents[i + j] != 0) {
+                is_tombstone = 0;
+                break;
+            }
+        }
         
-        if(curr_contents[i] == 0 && curr_contents[i+1] == 0) {
-            // Found a tombstone
+        if(is_tombstone) {
             info(1, "Found tombstone at offset %zu\n", i);
             write_offset = i;
             break;
         }
     }
     info(1, "Final write offset: %zu\n", write_offset);
-    // // Find tombstone or end of directory
-    // size_t write_offset = curr_size;  // Default to appending
-    // for(size_t i = 0; i < curr_size; i += DIRECTORY_ENTRY_SIZE) {
-    //     if(curr_contents[i] == 0 && curr_contents[i+1] == 0) {
-    //         // Found a tombstone
-    //         write_offset = i;
-    //         break;
-    //     }
-    // }
-    
-    // Write the new entry at the correct offset
     inode_modify_data(context->fs, curr_dir->inode, write_offset, contents, DIRECTORY_ENTRY_SIZE);
     // Clean up
     info(1, "Inspecting dblock index 1:\n");
