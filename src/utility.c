@@ -4,6 +4,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+
+
+// EDIT VVVV
+// #include "debug.h"
 /**
  * !! DO NOT MODIFY THIS FILE !!
  */
@@ -294,3 +298,165 @@ void display_filesystem(filesystem_t *fs, fs_display_flag_t flag)
         }
     }
 }
+
+
+
+
+// static void info_display_direct_dblock_indices(filesystem_t *fs, inode_t *node)
+// {
+//     size_t file_size = node->internal.file_size;
+//     size_t dblocks_needed = (file_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
+    
+//     size_t direct_dblocks_used = dblocks_needed < INODE_DIRECT_BLOCK_COUNT ? dblocks_needed : INODE_DIRECT_BLOCK_COUNT;
+
+//     for (size_t i = 0; i < direct_dblocks_used; ++i)
+//     {
+//         info(1, "%u ", node->internal.direct_data[i]);
+//     }
+// }
+
+// static void info_display_indirect_dblock_indices(filesystem_t *fs, inode_t *node)
+// {
+//     size_t file_size = node->internal.file_size;
+//     size_t dblocks_needed = (file_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
+
+//     // since this func is only called if we know there must be indirect data block indices
+//     size_t indirect_dblocks_needed = dblocks_needed - INODE_DIRECT_BLOCK_COUNT;
+
+//     // take the index of the first index block
+//     dblock_index_t index_blk_idx = node->internal.indirect_dblock;
+//     size_t i = 0;
+//     while (i < indirect_dblocks_needed)
+//     {
+//         size_t indirect_idx_offset = i % INDIRECT_DBLOCK_INDEX_COUNT;
+//         // if we have looked through all the indices stored inside of an index block, we update to look at the next index block
+//         if (i != 0 && indirect_idx_offset == 0)
+//         {
+//             index_blk_idx = *cast_dblock_ptr(&fs->dblocks[ index_blk_idx * DATA_BLOCK_SIZE + NEXT_INDIRECT_INDEX_OFFSET ]);
+//         }
+//         // index_blk_idx * DATA_BLOCK_SIZE is the number of bytes into the byte array that data block number index_blk_idx begins
+//         // indirect_idx_offset * sizeof(dblock_index_t) is the number of bytes into the data block that the indirect_dblock_index index begins.
+//         // so, the line below returns the dblock index at index indirect_idx_offset in the index_blk_idx index block.
+//         dblock_index_t indirect_dblock_index = *cast_dblock_ptr(&fs->dblocks[ index_blk_idx * DATA_BLOCK_SIZE + indirect_idx_offset * sizeof(dblock_index_t) ]);
+//         info(1, "%u ", indirect_dblock_index);
+//         ++i;
+//     };  
+// }
+
+// static void info_display_indirect_index_indices(filesystem_t *fs, inode_t *node)
+// {
+//     size_t file_size = node->internal.file_size;
+//     size_t dblocks_needed = (file_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
+
+//     // since this func is only called if we know there must be indirect data block indices
+//     size_t indirect_dblocks_needed = dblocks_needed - INODE_DIRECT_BLOCK_COUNT;
+
+//     // take the index of the first index block
+//     dblock_index_t index_blk_idx = node->internal.indirect_dblock;
+//     size_t i = 0;
+//     while (i < indirect_dblocks_needed)
+//     {
+//         size_t indirect_idx_offset = i % INDIRECT_DBLOCK_INDEX_COUNT;
+//         // if we have looked through all the indices stored inside of an index block, we update to look at the next index block
+//         if (i != 0 && indirect_idx_offset == 0)
+//         {
+//             index_blk_idx = *cast_dblock_ptr(&fs->dblocks[ index_blk_idx * DATA_BLOCK_SIZE + NEXT_INDIRECT_INDEX_OFFSET ]);
+//         }
+//         info(1, "%u ", index_blk_idx);
+//         i += INDIRECT_DBLOCK_INDEX_COUNT;
+//     };  
+// }
+
+// void info_display_filesystem(filesystem_t *fs, fs_display_flag_t flag)
+// {
+//     if (!fs)
+//     {
+//         info(1,"No file system specified.");
+//         return;
+//     } 
+
+//     if (flag & DISPLAY_FS_FORMAT)
+//     {
+//         info(1, "File System Structure:");
+//         info(1, "\tavailable inode: %lu / %lu\n", available_inodes(fs), fs->inode_count);   
+//         info(1, "\tavailable dblock: %lu / %lu\n", available_dblocks(fs), fs->dblock_count);
+//     }
+
+//     if (flag & DISPLAY_INODES)
+//     {
+//         byte *inode_mask = calloc((fs->inode_count + 7) / 8, sizeof(byte));
+//         set_inode_mask(fs, inode_mask);
+//         info(1, "I-Node List:");
+//         for (size_t i = 0; i < fs->inode_count; ++i)
+//         {
+//             if (!(inode_mask[i / 8] & (1 << (i % 8))))
+//             {
+//                 inode_t *inode = &fs->inodes[i];
+//                 char filename[MAX_FILE_NAME_LEN + 1] = { 0 };
+//                 extract_filename(inode, filename);
+
+//                 if (inode->internal.file_perms)
+//                 {
+//                     const char *rd_perm_str = inode->internal.file_perms & FS_READ ? "READ " : "";
+//                     const char *wr_perm_str = inode->internal.file_perms & FS_WRITE ? "WRITE " : "";
+//                     const char *x_perm_str = inode->internal.file_perms & FS_EXECUTE ? "EXECUTE " : "";
+//                     info(1, "\tinode index %lu [.type = %s .perm = %s%s%s .name = \"%s\" .size = %lu]\n", 
+//                         i, filetype_str_table[inode->internal.file_type],
+//                         rd_perm_str, wr_perm_str, x_perm_str, filename, inode->internal.file_size
+//                     );
+//                 }
+//                 else
+//                 {
+//                     info(1, "\tinode index %lu [.type = %s .name = \"%s\" .size = %lu]\n", 
+//                         i, filetype_str_table[inode->internal.file_type],
+//                         filename, inode->internal.file_size
+//                     );
+//                 }
+                
+
+//                 size_t file_size = inode->internal.file_size;
+
+//                 if (file_size > 0)
+//                 {
+//                     info(1, "\t\tDirect Data Blocks: ");
+//                     info_display_direct_dblock_indices(fs, inode);
+//                     info(1, "");
+                    
+//                     if (file_size > DATA_BLOCK_SIZE * INODE_DIRECT_BLOCK_COUNT)
+//                     {
+//                         info(1, "\t\tIndirect Data Blocks: ");
+//                         info_display_indirect_dblock_indices(fs, inode);
+//                         info(1, "");
+
+//                         info(1, "\t\tIndirect Index Blocks: ");
+//                         info_display_indirect_index_indices(fs, inode);
+//                         info(1, "");
+//                     }
+//                 }
+//             }
+//         }
+        
+//         free(inode_mask);
+//     }
+
+//     if (flag & DISPLAY_DBLOCKS)
+//     {
+//         puts("Data Block List:");
+//         for (size_t idx = 0; idx < fs->dblock_count; ++idx)
+//         {
+//             size_t block_idx = idx / 8;
+//             size_t bit_idx = idx % 8;
+//             if (!(fs->dblock_bitmask[block_idx] & (1 << (7 - bit_idx))))
+//             {
+//                 printf("\tdblock index %ld", idx);
+//                 for (size_t k = 0; k < DATA_BLOCK_SIZE; ++k)
+//                 {
+//                     if (k % DBLOCK_DISPLAY_LEN == 0) printf("\n\t\t");
+//                     printf("%02x ", fs->dblocks[idx * DATA_BLOCK_SIZE + k]);
+//                 }
+//                 printf("\n");
+//             }
+//         }
+//     }
+// }
+
