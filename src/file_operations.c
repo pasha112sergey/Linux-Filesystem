@@ -9,9 +9,6 @@
 
 // ----------------------- CORE FUNCTION ----------------------- //
 
-
-
-
 char* write_index_and_name(inode_index_t new_inode_index, char* dest)
 {
     char *new_entry = calloc(16, 1);
@@ -120,6 +117,81 @@ char *get_path_before_dest(char *path)
     dest[strlen(dest)-1] = '\0'; // Remove the trailing slash
     return dest;
 }
+
+
+inode_index_t find_index_of(terminal_context_t *context, inode_t *inode, char* path_before_dest, int len_path)
+{
+    if(!inode || !path_before_dest) return 0;
+    
+    char *dupe = strdup(path_before_dest);
+    char **file_path = split_string(dupe);
+    inode_index_t ret = 0;
+    inode_t *curr_dir = context->working_directory;
+    
+    // Traverse through the path
+    for(int i = 0; i < len_path; i++)
+    {            
+        byte *contents = malloc(curr_dir->internal.file_size);
+        if (!contents) {
+            free(dupe);
+            return -1;
+        }
+        
+        size_t file_size = curr_dir->internal.file_size;
+        inode_read_data(context->fs, curr_dir, 0, contents, file_size, &file_size);
+        
+        int n = file_size / 16;
+        char **content_names = malloc(n * sizeof(char *));
+        inode_index_t *indices = malloc(n * sizeof(inode_index_t));
+        
+        // Read directory entries
+        for(int j = 0; j < n; j++)
+        {
+            char* name = calloc(14, 1);
+            indices[j] = get_index(contents, j);
+            strncpy(name, (char*)&contents[16*j + 2], 13);
+            name[13] = '\0';
+            content_names[j] = name;
+            
+            info(1, "Entry %d: %s (index=%d)\n", j, name, indices[j]);
+        }
+        
+        // Find matching entry
+        int found = 0;
+        for(int j = 0; j < n; j++)
+        {
+            if(strcmp(file_path[i], content_names[j]) == 0) 
+            {
+                found = 1;
+                ret = indices[j];
+                curr_dir = &context->fs->inodes[indices[j]]; // Update current directory
+                info(1, "Found '%s' at index %d\n", file_path[i], indices[j]);
+                break;
+            }
+        }
+        
+        if(i == len_path - 1 && found) {
+            info(1, "Final index: %d\n", ret);
+            return ret;
+        }
+        // Clean up
+        for(int j = 0; j < n; j++) {
+            free(content_names[j]);
+        }
+        free(content_names);
+        free(indices);
+        free(contents);
+        
+        if(!found && i) {
+            free(dupe);
+            return -1;
+        }
+    }
+    
+    free(dupe);
+    return ret;
+}
+
 
 fs_file_t fs_open_dir(terminal_context_t *context, char *path)
 {
@@ -287,7 +359,6 @@ int new_file(terminal_context_t *context, char *path, permission_t perms)
     int path_len = get_path_length(path);
     char *dest = split_string(path)[path_len-1];
 
-    info(1, "next available is: %d\n", context->fs->available_inode);
     fs_file_t curr_dir = fs_open_dir(context, path_before_dest);
     if(!curr_dir)
     {
@@ -300,7 +371,6 @@ int new_file(terminal_context_t *context, char *path, permission_t perms)
         return -1;
     }
 
-    info(1, "next available is: %d\n", context->fs->available_inode);
     //need to write the file name into the directory
     inode_index_t *new_inode_index = malloc(sizeof(inode_index_t));
     if(claim_available_inode(context->fs, new_inode_index) == SUCCESS)
@@ -321,14 +391,6 @@ int new_file(terminal_context_t *context, char *path, permission_t perms)
     }
     new_inode->internal.indirect_dblock = 0;
     new_inode->internal.file_perms = perms;
-
-    // error somewhere, here, i might not be writing it correctly
-    // char *contents = write_index_and_name(*new_inode_index, dest);
-    // debug_contents((byte*)contents, DIRECTORY_ENTRY_SIZE);
-    // inode_write_data(context->fs, curr_dir->inode, contents, DIRECTORY_ENTRY_SIZE);
-    // info(1, "New inode index: %d (0x%02x)\n", *new_inode_index, *new_inode_index);
-    
-    // //check if there is enough space in the file system
     char *contents = write_index_and_name(*new_inode_index, dest);
     debug_contents((byte*)contents, DIRECTORY_ENTRY_SIZE);
     
@@ -366,14 +428,110 @@ int new_file(terminal_context_t *context, char *path, permission_t perms)
     free(contents);
     free(curr_contents);
     return 0;
-    
 }
 
 int new_directory(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
-    return -2;
+    if(!context || !path) return 0;
+    if(available_inodes(context->fs) <= 1)
+    {
+        printf("Error: No inodes available\n");
+        return -1;
+    }
+    if(available_dblocks(context->fs) <= 1)
+    {
+        printf("Error: Not enough dblocks for operation\n");
+        return -1;
+    }
+    char *path_before_dest = get_path_before_dest(path);
+    int path_len = get_path_length(path);
+    char *dest = split_string(path)[path_len-1];
+
+    fs_file_t curr_dir = fs_open_dir(context, path_before_dest);
+    if(!curr_dir)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    if(fs_contains(context->fs, curr_dir, dest))
+    {
+        printf("Error: Directory already exists\n");
+        return -1;
+    }
+
+    //need to write the file name into the directory
+    inode_index_t *new_inode_index = malloc(sizeof(inode_index_t));
+    if(claim_available_inode(context->fs, new_inode_index) == SUCCESS)
+    {
+        info(1, "Claimed inode index: %d (0x%02x)\n", *new_inode_index, *new_inode_index);
+    }
+    else
+    {
+        return -1;
+    }
+    inode_t *new_inode = &context->fs->inodes[*new_inode_index];
+    new_inode->internal.file_type = DIRECTORY;
+    new_inode->internal.file_size = 0; // 2 entries for "." and ".."
+    strncpy(new_inode->internal.file_name, dest, 14);
+    new_inode->internal.indirect_dblock = 0;
+
+    char *special_data1 = malloc(DIRECTORY_ENTRY_SIZE);
+    char *special_data2 = malloc(DIRECTORY_ENTRY_SIZE);
+    special_data1 = write_index_and_name(*new_inode_index, ".");
+    inode_index_t parent_dir_index = find_index_of(context, curr_dir->inode, path_before_dest, path_len-1);
+    special_data2 = write_index_and_name(parent_dir_index, "..");
+
+    inode_write_data(context->fs, new_inode, special_data1 , 16);
+    inode_write_data(context->fs, new_inode, special_data2, 16);
+
+
+    char *contents = write_index_and_name(*new_inode_index, dest);
+    debug_contents((byte*)contents, DIRECTORY_ENTRY_SIZE);
+    
+    // Get current directory contents to find tombstone or append position
+    byte *curr_contents = malloc(curr_dir->inode->internal.file_size);
+    size_t curr_size = curr_dir->inode->internal.file_size;
+    inode_read_data(context->fs, curr_dir->inode, 0, curr_contents, curr_size, &curr_size);
+    size_t write_offset = curr_size;  // Default to appending
+    for(size_t i = 0; i < curr_size; i += 16) {
+        // Check all 16 bytes for zeros
+        int is_tombstone = 1;
+        for(int j = 0; j < 16; j++) {
+            if(curr_contents[i + j] != 0) {
+                is_tombstone = 0;
+                break;
+            }
+        }
+        
+        if(is_tombstone) {
+            info(1, "Found tombstone at offset %zu\n", i);
+            write_offset = i;
+            break;
+        }
+    }
+    info(1, "Final write offset: %zu\n", write_offset);
+    inode_modify_data(context->fs, curr_dir->inode, write_offset, contents, DIRECTORY_ENTRY_SIZE);
+    // Clean up
+    info(1, "Inspecting dblock index 1:\n");
+    info(1, "file_size: %zu\n", new_inode->internal.file_size);
+    info(1, "file_type: %d\n", new_inode->internal.file_type);
+    info(1, "file_name: %s\n", new_inode->internal.file_name);
+    info(1, "direct_data: %u\n", new_inode->internal.direct_data[0]);
+    for(int i = 0; i < 64; i++) {
+        info(1, "Byte %d: 0x%02x ('%c')\n", 
+             i, 
+             context->fs->dblocks[64*3 + i],  // dblock 1 starts at offset 64
+             context->fs->dblocks[64*3 + i]);
+    }
+    for(int i = 0; i < 64; i++) {
+        info(1, "Byte %d: 0x%02x ('%c')\n", 
+             i, 
+             context->fs->dblocks[64*4 + i],  // dblock 1 starts at offset 64
+             context->fs->dblocks[64*4 + i]);
+    }
+    free(contents);
+    free(curr_contents);
+    return 0;
 }
 
 int remove_file(terminal_context_t *context, char *path)
