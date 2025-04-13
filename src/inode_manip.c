@@ -685,14 +685,17 @@ fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, 
 
 fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size)
 {
+    
     if(!fs || !inode) return INVALID_INPUT;
     if(new_size > inode->internal.file_size) return INVALID_INPUT;
-
+    if(inode->internal.file_size == 0) return SUCCESS;
     int num_dblocks_new = calculate_necessary_dblock_amount(new_size);
     int num_dblocks_curr = calculate_necessary_dblock_amount(inode->internal.file_size);
     if(num_dblocks_curr == 1)
     {
+
         inode->internal.file_size = new_size;
+        release_dblock(fs, &fs->dblocks[inode->internal.direct_data[0] * 64]);
         return SUCCESS;
     }
 
@@ -709,8 +712,14 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
         if (num_dblocks_curr <= 4)
             free_dblock(fs, inode->internal.indirect_dblock);
     }
+    if(inode->internal.file_size == 0)
+    {
+        free_dblock(fs, inode->internal.direct_data[0]);
+        inode->internal.file_size = 0;
+        return SUCCESS;
+    }
     num_dblocks_curr--;
-    display_filesystem(fs, DISPLAY_ALL);
+    // display_filesystem(fs, DISPLAY_ALL);
     if(num_dblocks_new != 0)
         num_dblocks_new--;
     int curr = inode->internal.direct_data[num_dblocks_curr];
@@ -725,9 +734,9 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
     inode->internal.file_size = new_size;
     if (inode->internal.file_size == 0)
     {
-        display_filesystem(fs, DISPLAY_INODES);
+        // //display_filesystem(fs, DISPLAY_INODES);
         free_dblock(fs, inode->internal.direct_data[0]);
-        display_filesystem(fs, DISPLAY_INODES);
+        // display_filesystem(fs, DISPLAY_INODES);
 
     }
     return SUCCESS;

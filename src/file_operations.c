@@ -118,7 +118,6 @@ char *get_path_before_dest(char *path)
     return dest;
 }
 
-
 inode_index_t find_index_of(terminal_context_t *context, inode_t *inode, char* path_before_dest, int len_path)
 {
     if(!inode || !path_before_dest) return 0;
@@ -192,14 +191,14 @@ inode_index_t find_index_of(terminal_context_t *context, inode_t *inode, char* p
     return ret;
 }
 
-
 fs_file_t fs_open_dir(terminal_context_t *context, char *path)
 {
     if(!context || !path) return NULL;
     char *dupe = strdup(path); 
     int len_path = 1;
+    int len = strlen(path);
     //counts the number of steps in the path
-    for(int i = 0; path[i] != 0; i++)
+    for(int i = 0; i<len && path[i] != 0; i++)
     {
         if(path[i] == '/')
         len_path++;
@@ -218,8 +217,8 @@ fs_file_t fs_open_dir(terminal_context_t *context, char *path)
         byte *contents = malloc(curr_dir->internal.file_size);
         size_t file_size = curr_dir->internal.file_size;
         inode_read_data(context->fs, curr_dir, 0, contents, curr_dir->internal.file_size, &file_size);
-        // debug_contents(contents, file_size);
-        //i need to put 16 bytes into a string
+
+
         int n = file_size / 16;
         char **content_names = malloc(n * sizeof(char *));
         inode_index_t *indices = malloc(n * sizeof(inode_index_t));
@@ -471,25 +470,31 @@ int new_directory(terminal_context_t *context, char *path)
     }
     inode_t *new_inode = &context->fs->inodes[*new_inode_index];
     new_inode->internal.file_type = DIRECTORY;
-    new_inode->internal.file_size = 0; // 2 entries for "." and ".."
-    strncpy(new_inode->internal.file_name, dest, 14);
+    new_inode->internal.file_size = 0; 
+    size_t dest_len = strlen(dest);
+    strncpy(new_inode->internal.file_name, dest, dest_len);
+    if (dest_len < MAX_FILE_NAME_LEN) {
+        new_inode->internal.file_name[dest_len] = '\0';
+    }
     new_inode->internal.indirect_dblock = 0;
 
-    char *special_data1 = malloc(DIRECTORY_ENTRY_SIZE);
-    char *special_data2 = malloc(DIRECTORY_ENTRY_SIZE);
+    char *special_data1 = calloc(DIRECTORY_ENTRY_SIZE, 1);
+    char *special_data2 = calloc(DIRECTORY_ENTRY_SIZE, 1);
     special_data1 = write_index_and_name(*new_inode_index, ".");
     inode_index_t parent_dir_index = find_index_of(context, curr_dir->inode, path_before_dest, path_len-1);
     special_data2 = write_index_and_name(parent_dir_index, "..");
 
     inode_write_data(context->fs, new_inode, special_data1 , 16);
+
     inode_write_data(context->fs, new_inode, special_data2, 16);
 
+    new_inode->internal.file_size = 32;
 
     char *contents = write_index_and_name(*new_inode_index, dest);
     debug_contents((byte*)contents, DIRECTORY_ENTRY_SIZE);
     
     // Get current directory contents to find tombstone or append position
-    byte *curr_contents = malloc(curr_dir->inode->internal.file_size);
+    byte *curr_contents = calloc(curr_dir->inode->internal.file_size, 1);
     size_t curr_size = curr_dir->inode->internal.file_size;
     inode_read_data(context->fs, curr_dir->inode, 0, curr_contents, curr_size, &curr_size);
     size_t write_offset = curr_size;  // Default to appending
@@ -511,23 +516,27 @@ int new_directory(terminal_context_t *context, char *path)
     }
     info(1, "Final write offset: %zu\n", write_offset);
     inode_modify_data(context->fs, curr_dir->inode, write_offset, contents, DIRECTORY_ENTRY_SIZE);
+
     // Clean up
     info(1, "Inspecting dblock index 1:\n");
     info(1, "file_size: %zu\n", new_inode->internal.file_size);
     info(1, "file_type: %d\n", new_inode->internal.file_type);
     info(1, "file_name: %s\n", new_inode->internal.file_name);
     info(1, "direct_data: %u\n", new_inode->internal.direct_data[0]);
-    for(int i = 0; i < 64; i++) {
-        info(1, "Byte %d: 0x%02x ('%c')\n", 
-             i, 
-             context->fs->dblocks[64*3 + i],  // dblock 1 starts at offset 64
-             context->fs->dblocks[64*3 + i]);
-    }
-    for(int i = 0; i < 64; i++) {
-        info(1, "Byte %d: 0x%02x ('%c')\n", 
-             i, 
-             context->fs->dblocks[64*4 + i],  // dblock 1 starts at offset 64
-             context->fs->dblocks[64*4 + i]);
+
+
+    info(1, "file_size: %zu\n", context->fs->inodes[parent_dir_index].internal.file_size);
+    info(1, "file_type: %d\n", context->fs->inodes[parent_dir_index].internal.file_type);
+    info(1, "file_name: %s\n", context->fs->inodes[parent_dir_index].internal.file_name);
+    info(1, "direct_data: %u\n", context->fs->inodes[parent_dir_index].internal.direct_data[0]);
+    for(int j = 0; j < 5; j++)
+    {
+        for(int i = 0; i < 64; i++) {
+            info(1, "Byte %d: 0x%02x ('%c')\n", 
+                i, 
+                context->fs->dblocks[64*j + i],  // dblock 1 starts at offset 64
+                context->fs->dblocks[64*j + i]);
+        }
     }
     free(contents);
     free(curr_contents);
@@ -536,45 +545,680 @@ int new_directory(terminal_context_t *context, char *path)
 
 int remove_file(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
-    return -2;
+    if(!context || !path) return 0;
+    char *dupe = strdup(path);
+    int len_path = get_path_length(dupe);
+    char **file_path = split_string(dupe);
+    char *dest = file_path[len_path-1];
+
+    char *path_before_dest = get_path_before_dest(path);
+    fs_file_t parent_dir;
+    if(strcmp(path_before_dest, "") == 0)    
+    {
+        parent_dir = malloc(sizeof(struct fs_file));
+        if (!parent_dir) return -1;
+        parent_dir->fs = context->fs;
+        parent_dir->inode = context->working_directory;
+        parent_dir->offset = 0;
+    }
+    else
+    {
+        parent_dir = fs_open_dir(context, path_before_dest);
+    }
+
+    if(!parent_dir)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    if(!fs_contains(context->fs, parent_dir, dest))
+    {
+        printf("Error: File not found\n");
+        return -1;
+    }
+
+    fs_file_t file = fs_open_dir(context, path);
+    if(!file || file->inode->internal.file_type != DATA_FILE)
+    {
+        printf("Error: File not found\n");
+        return -1;
+    }
+    inode_t *inode = file->inode;
+    inode_index_t removed_index = find_index_of(context, inode, path, len_path);
+    // Get current directory contents to find tombstone or append position
+    byte *curr_contents = malloc(parent_dir->inode->internal.file_size);
+    inode_read_data(context->fs, parent_dir->inode, 0, curr_contents, parent_dir->inode->internal.file_size, &parent_dir->inode->internal.file_size);
+    for(size_t i = 0; i < parent_dir->inode->internal.file_size; i++)
+    {
+        info(1, "Byte %zu: 0x%02x ('%c')\n", 
+            i, 
+            curr_contents[i],
+            curr_contents[i]);
+    }
+    // for(size_t i = 0; i < parent_dir->inode->internal.file_size; i += 16) 
+    // {
+    //     inode_index_t index = get_index(curr_contents, i/16);
+    //     if(index == removed_index) 
+    //     {
+    //         // Mark the entry as a tombstone
+    //         byte entry[16] = {0};
+    //         inode_modify_data(context->fs, parent_dir->inode, i, entry, 16);
+    //         info(1, "Marked entry at offset %zu as tombstone\n", i);
+    //         break;
+    //     }
+    // }
+    byte *contents = malloc(parent_dir->inode->internal.file_size);
+    inode_read_data(context->fs, parent_dir->inode, 0, contents, parent_dir->inode->internal.file_size, &parent_dir->inode->internal.file_size);
+    for(size_t i = 0; i < parent_dir->inode->internal.file_size; i += 16) 
+    {
+        inode_index_t index = get_index(curr_contents, i/16);
+        if(index == removed_index) 
+        {
+            // Mark the entry as a tombstone
+            byte entry[16] = {0};
+            inode_modify_data(context->fs, parent_dir->inode, i, entry, 16);
+            
+            int trailing_tombstone = 1;
+            for(size_t j = i + 16; j < parent_dir->inode->internal.file_size; j++) 
+            {
+                if(contents[j] != 0) {
+                    trailing_tombstone = 0;
+                } 
+            }
+            if(trailing_tombstone) {
+                parent_dir->inode->internal.file_size -= 16;
+            }
+            info(1, "Marked entry at offset %zu as tombstone\n", i);
+            break;
+        }
+    }
+
+    inode_release_data(context->fs, inode);
+    release_inode(context->fs, inode);
+    free(file);
+    if (parent_dir) {
+        free(parent_dir);
+    }
+
+    return 0;
 }
 
+
+int is_empty(filesystem_t *fs ,inode_t *inode)
+{
+    if(!inode) return 0;
+    if(inode->internal.file_size == 0) return 1;
+    byte *contents = calloc(inode->internal.file_size, 1);
+    size_t file_size = inode->internal.file_size;
+    inode_read_data(fs, inode, 32, contents, inode->internal.file_size, &file_size);
+    for(size_t i = 0; i < inode->internal.file_size; i++)
+    {
+        if(contents[i] != 0) return 1;
+    }
+    return 0;
+}
+
+
+
+#define DBLOCK_MASK_SIZE(blk_count) (((blk_count) + 7) / (sizeof(byte) * 8))
+
+
+// Print the data block bitmap
+void debug_dblock_bitmap(filesystem_t *fs) {
+    info(1, "Data Block Bitmap:\n");
+    for (size_t i = 0; i < DBLOCK_MASK_SIZE(fs->dblock_count); i++) {
+        info(1, "Byte %zu: 0x%02x (binary: ", i, fs->dblocks[i]);
+        for (int j = 7; j >= 0; j--) {
+            info(1, "%d", (fs->dblocks[i] >> j) & 1);
+        }
+        info(1, ")\n");
+    }
+}
+
+// Track data block allocation and release
+void debug_dblock_operation(filesystem_t *fs, byte dblock_index, const char* operation) {
+    size_t byte_index = dblock_index / 8;
+    size_t bit_index = dblock_index % 8;
+    info(1, "%s dblock %u (byte %zu, bit %zu)\n", 
+         operation, dblock_index, byte_index, bit_index);
+    info(1, "Before operation: 0x%02x\n", fs->dblocks[byte_index]);
+}
+
+// Debug inode data blocks
+void debug_inode_blocks(filesystem_t *fs, inode_t *inode) {
+    info(1, "Inode direct data blocks:\n");
+    for (int i = 0; i < 4; i++) {
+        if (inode->internal.direct_data[i] != 0) {
+            info(1, "  Block %d: %u\n", i, inode->internal.direct_data[i]);
+        }
+    }
+    if (inode->internal.indirect_dblock != 0) {
+        info(1, "Indirect block: %u\n", inode->internal.indirect_dblock);
+    }
+}
+
+// Add these calls in your remove_directory function:
 // we can only delete a directory if it is empty!!
+void debug_parent_dir(filesystem_t *fs, inode_t *parent_inode) {
+    info(1, "\n=== Parent Directory Debug Info ===\n");
+    info(1, "File size: %zu\n", parent_inode->internal.file_size);
+    info(1, "File type: %d\n", parent_inode->internal.file_type);
+    info(1, "File name: %s\n", parent_inode->internal.file_name);
+    
+    // Print directory entries
+    byte *contents = malloc(parent_inode->internal.file_size);
+    size_t size = parent_inode->internal.file_size;
+    inode_read_data(fs, parent_inode, 0, contents, size, &size);
+    
+    info(1, "\nDirectory Entries:\n");
+    for(size_t i = 0; i < size; i += 16) {
+        inode_index_t index = get_index(contents, i/16);
+        char name[14] = {0};
+        strncpy(name, (char*)&contents[i + 2], 13);
+        
+        info(1, "Entry %zu:\n", i/16);
+        info(1, "  Index: %u\n", index);
+        info(1, "  Name: %s\n", name);
+        info(1, "  Raw bytes: ");
+        for(int j = 0; j < 16; j++) {
+            info(1, "%02x ", contents[i + j]);
+        }
+        info(1, "\n");
+    }
+    
+    free(contents);
+    info(1, "================================\n\n");
+}
+
 int remove_directory(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
-    return -2;
+    if(!context || !path) return 0;
+
+    debug_dblock_bitmap(context->fs);
+
+
+    char *dupe = strdup(path);
+    int len_path = get_path_length(dupe);
+    char **file_path = split_string(dupe);
+    char *dest = file_path[len_path-1];
+    if(strcmp(dest, context->working_directory->internal.file_name) == 0)
+    {
+        printf("Error: Cannot delete current working directory\n");
+        return -1;
+    }
+    char *path_before_dest = get_path_before_dest(path);
+    fs_file_t parent_dir;
+    if(strcmp(path_before_dest, "") == 0)    
+    {
+        parent_dir = malloc(sizeof(struct fs_file));
+        if (!parent_dir) return -1;
+        parent_dir->fs = context->fs;
+        parent_dir->inode = context->working_directory;
+        parent_dir->offset = 0;
+    }
+    else
+    {
+        parent_dir = fs_open_dir(context, path_before_dest);
+    }
+
+    if(!parent_dir)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    if(!fs_contains(context->fs, parent_dir, dest))
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+
+    fs_file_t file = fs_open_dir(context, path);
+    if(!file || file->inode->internal.file_type != DIRECTORY)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    
+    if(strcmp(dest,".") == 0 || strcmp(dest,"..") == 0)
+    {
+        printf("Error: Invalid file name\n");
+        return -1;
+    }
+    if(is_empty(context->fs, file->inode) != 0)
+    {
+        printf("Error: Directory is not empty\n");
+        return -1;
+    }
+
+
+
+
+
+    
+    inode_t *inode = file->inode;
+    inode_index_t removed_index = find_index_of(context, inode, path, len_path);
+
+
+    debug_dblock_bitmap(context->fs);
+    debug_inode_blocks(context->fs, inode);
+
+
+
+    debug_dblock_operation(context->fs, inode->internal.direct_data[0], "Releasing");
+
+    inode_release_data(context->fs, inode);
+    inode->internal.file_size = 0;
+
+    debug_dblock_bitmap(context->fs);
+
+
+    release_inode(context->fs, inode);
+
+
+    debug_dblock_bitmap(context->fs);
+
+
+    byte *contents = malloc(parent_dir->inode->internal.file_size);
+    size_t n = 0;
+    inode_read_data(context->fs, parent_dir->inode, 0, contents, parent_dir->inode->internal.file_size, &n);
+    for(size_t i = 0; i < parent_dir->inode->internal.file_size; i += 16)
+    {
+        inode_index_t index = get_index(contents, i/16);
+        if(index == removed_index) 
+        {
+            // Mark the entry as a tombstone
+
+            debug_parent_dir(context->fs, parent_dir->inode);
+
+            byte entry[16] = {0};
+            inode_modify_data(context->fs, parent_dir->inode, i, entry, 16);
+            
+            debug_parent_dir(context->fs, parent_dir->inode);
+
+            size_t last_non_tombstone = 0;
+            inode_read_data(context->fs, parent_dir->inode, 0, contents, parent_dir->inode->internal.file_size, &n);
+            for(size_t j = 0; j < parent_dir->inode->internal.file_size; j+=16) 
+            {
+                int tombstone = 1;
+                for(int k = 0; k < 16; k++) {
+                    if(contents[j + k] != 0) {
+                        tombstone = 0;
+                        break;
+                    }
+                }
+
+                if(tombstone == 0) {
+                    last_non_tombstone = j;
+                }
+            }
+            if(last_non_tombstone+16 <= parent_dir->inode->internal.file_size) {
+                parent_dir->inode->internal.file_size = last_non_tombstone+16;
+            } else {
+                inode_shrink_data(context->fs, parent_dir->inode, last_non_tombstone+16);
+            }
+        }
+    }
+
+    
+    
+    free(file);
+    if (parent_dir) {
+        free(parent_dir);
+    }
+
+    return 0;
 }
 
 int change_directory(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
-    return -2;
+    if(!context || !path) return 0;
+    char *dupe = strdup(path);
+    int len_path = get_path_length(dupe);
+    char **file_path = split_string(dupe);
+    char *dest = file_path[len_path-1];
+    if(strcmp(dest, context->working_directory->internal.file_name) == 0)
+    {
+        printf("Error: Cannot change to current working directory\n");
+        return -1;
+    }
+    fs_file_t new_wdir = fs_open_dir(context, path);
+    if(new_wdir == NULL)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    if(new_wdir->inode->internal.file_type != DIRECTORY)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    // if(strcmp(dest,".") == 0 || strcmp(dest,"..") == 0)
+    // {
+    //     printf("Error: Invalid file name\n");
+    //     return -1;
+    // }
+    context->working_directory = new_wdir->inode;
+    return 0;
 }
 
+
+// Displays the content of a file or a directory located at path relative to the working directory in context.
+// If the basename of the path is a file, display the permissions, file size, and filename of the inode of the file.
+// If the basename of the path is a directory, display each the directory entries on separate lines treating each child item (both files and directories) of the directory the same manner as the previous bullet point.
+// Even for directories, just display the value stored in the inode file size field as the file size of the directory.
+// The formatting of displaying a file is:
+// The first character of the line should be d if the inode is a directory or f if it is a file. You can use E for any other file types (we have no tests for this, so it is optional)
+// The second character of the line should be r if there is read permissions, - otherwise.
+// The third character of the line should be w if there is write permissions, - otherwise.
+// The fourth character of the line should be x if there is execute permissions, - otherwise.
+// The next character should be the tab character \t.
+// The next part should be the inode file size displayed as an unsigned long in base 10.
+// The next character directly after the file size should be the tab character \t.
+// The next part should be the file name as stored in the directory entry (if the basename refer to a directory) or in the inode (if basename refer to a file).
+// If directory entry being displayed is a special directory entry, then display -> (One space before and after) immediately after the previous file name. After the array, display the name of the inode.
 int list(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
-    return -2;
+    if(!context || !path) return 0;
+    char *path_before_dest = get_path_before_dest(path);
+    fs_file_t parent;
+    if(strcmp(path_before_dest, "") == 0)    
+    {
+        parent = malloc(sizeof(struct fs_file));
+        if (!parent) return -1;
+        parent->fs = context->fs;
+        parent->inode = context->working_directory;
+        parent->offset = 0;
+    }
+    else
+        parent = fs_open_dir(context, path_before_dest);
+    
+    if(parent == NULL)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    fs_file_t file = fs_open_dir(context, path);
+
+    if(file == NULL)
+    {
+        printf("Error: Object not found\n");
+        return -1;
+    }
+
+
+    byte *contents = malloc(file->inode->internal.file_size);
+    size_t n = 0;
+    inode_read_data(context->fs, file->inode, 0, contents, file->inode->internal.file_size, &n);
+
+    if(file->inode->internal.file_type == DATA_FILE)
+    {
+        printf("f");
+        if(file->inode->internal.file_perms & FS_READ) printf("r");
+        else printf("-");
+        if(file->inode->internal.file_perms & FS_WRITE) printf("w");
+        else printf("-");
+        if(file->inode->internal.file_perms & FS_EXECUTE) printf("x");
+        else printf("-");
+        printf("\t%lu\t%s\n", file->inode->internal.file_size, file->inode->internal.file_name);
+        return 0;
+    }
+    else {
+        for(size_t i = 0; i < file->inode->internal.file_size; i += 16) {
+            inode_index_t index = get_index(contents, i/16);
+            char name[14] = {0};
+            strncpy(name, (char*)&contents[i + 2], 13);
+    
+            info(1, "Processing entry at offset %zu:\n", i);
+            info(1, "  Index: %u\n", index);
+            info(1, "  Name: %s\n", name);
+            info(1, "  File type: %d\n", context->fs->inodes[index].internal.file_type);
+            info(1, "  Permissions: %d\n", context->fs->inodes[index].internal.file_perms);
+    
+            if(context->fs->inodes[index].internal.file_type == DIRECTORY) {
+                info(1, "  Type: Directory\n");
+                printf("d");
+                info(1, "  Checking permissions:\n");
+                info(1, "    READ: %d\n", context->fs->inodes[index].internal.file_perms & FS_READ);
+                if(context->fs->inodes[index].internal.file_perms & FS_READ) printf("r");
+                else printf("-");
+                info(1, "    WRITE: %d\n", context->fs->inodes[index].internal.file_perms & FS_WRITE);
+                if(context->fs->inodes[index].internal.file_perms & FS_WRITE) printf("w");
+                else printf("-");
+                info(1, "    EXECUTE: %d\n", context->fs->inodes[index].internal.file_perms & FS_EXECUTE);
+                if(context->fs->inodes[index].internal.file_perms & FS_EXECUTE) printf("x");
+                else printf("-");
+            } else {
+                info(1, "  Type: File\n");
+                printf("f");
+                info(1, "  Checking permissions:\n");
+                info(1, "    READ: %d\n", context->fs->inodes[index].internal.file_perms & FS_READ);
+                if(context->fs->inodes[index].internal.file_perms & FS_READ) printf("r");
+                else printf("-");
+                info(1, "    WRITE: %d\n", context->fs->inodes[index].internal.file_perms & FS_WRITE);
+                if(context->fs->inodes[index].internal.file_perms & FS_WRITE) printf("w");
+                else printf("-");
+                info(1, "    EXECUTE: %d\n", context->fs->inodes[index].internal.file_perms & FS_EXECUTE);
+                if(context->fs->inodes[index].internal.file_perms & FS_EXECUTE) printf("x");
+                else printf("-");
+            }
+    
+            info(1, "  File size: %lu\n", context->fs->inodes[index].internal.file_size);
+            printf("\t%lu\t%s", context->fs->inodes[index].internal.file_size, name);
+    
+            if(index == 0) {
+                info(1, "  Special case: root directory\n");
+                printf(" -> root\n");
+            } else if(strcmp(name, ".") == 0) {
+                info(1, "  Special case: current directory (.)\n");
+                printf(" -> %s\n", name);
+            } else if (strcmp(name, "..") == 0) {
+                info(1, "  Special case: parent directory (..)\n");
+                info(1, "  Parent name: %s\n", file->inode->internal.file_name);
+                printf(" -> %s\n", file->inode->internal.file_name);
+            } else {
+                info(1, "  Regular entry\n");
+                printf("\n");
+            }
+        }
+    }
+    // else{
+    //     for(size_t i = 0; i < file->inode->internal.file_size; i += 16)
+    //     {
+    //         inode_index_t index = get_index(contents, i/16);
+    //         char name[14] = {0};
+    //         strncpy(name, (char*)&contents[i + 2], 13);
+
+    //         if(context->fs->inodes[index].internal.file_type == DIRECTORY)
+    //         {
+    //             printf("d");
+    //             if(file->inode->internal.file_perms & FS_READ) printf("r");
+    //             else printf("-");
+    //             if(file->inode->internal.file_perms & FS_WRITE) printf("w");
+    //             else printf("-");
+    //             if(file->inode->internal.file_perms & FS_EXECUTE) printf("x");
+    //             else printf("-");
+    //         }
+    //         else
+    //         {
+    //             printf("f");
+    //             if(file->inode->internal.file_perms && FS_READ) printf("r");
+    //             else printf("-");
+    //             if(file->inode->internal.file_perms && FS_WRITE) printf("w");
+    //             else printf("-");
+    //             if(file->inode->internal.file_perms && FS_EXECUTE) printf("x");
+    //             else printf("-");
+    //         }
+
+    //         printf("\t%lu\t%s", file->inode->internal.file_size, name);
+    //         if(index == 0)
+    //         {
+    //             printf(" -> root\n");
+    //         }
+    //         if(strcmp(name, ".") == 0)
+    //         {
+    //             printf(" -> %s\n", name);
+    //         }
+    //         else if (strcmp(name, "..") == 0)
+    //         {
+    //             printf(" -> %s\n", file->inode->internal.file_name);
+    //         }
+    //         else
+    //         {
+    //             printf("\n");
+    //         }
+    //     }
+    // }
+
+    return 0;
+}
+
+char* get_length_path_str(filesystem_t *fs, inode_t *root, inode_t *dest)
+{
+    size_t path_len = 0;
+    if(!root || !dest) return 0;
+
+    inode_t *curr_dir = dest;
+    char **reversed_path = malloc(fs->inode_count*sizeof(char*));
+    int count = 0;
+    reversed_path[count] = malloc(16);
+    strncpy(reversed_path[count], dest->internal.file_name, 14);
+    count++;
+    while(curr_dir != root)
+    {
+        char *name = calloc(16, 1);
+        path_len++;
+        byte *contents = calloc(16,1);
+        size_t len = 0;
+        inode_read_data(fs, curr_dir, 16, contents, 16, &len); 
+        inode_index_t index = get_index(contents, 0);
+        char *inode_name = fs->inodes[index].internal.file_name;
+        strncpy(name, inode_name, 13);
+        reversed_path[count] = name;
+        count++;
+        curr_dir = &fs->inodes[index];
+        free(contents);
+    }
+    
+    char *ans = calloc(count * 14, 1);
+    for(int i = count-1; i >= 0; i--)
+    {
+        ans = strcat(ans, reversed_path[i]);
+        ans = strcat(ans, "/");
+    }
+    ans[strlen(ans)-1] = '\0'; 
+    return ans;
 }
 
 char *get_path_string(terminal_context_t *context)
 {
-    (void) context;
+    if(!context) return calloc(0, 1);
+    return get_length_path_str(context->fs, &context->fs->inodes[0], context->working_directory);
+}
 
-    return NULL;
+void tree_dfs(inode_t *work_dir, terminal_context_t *context, inode_t *root, int depth, inode_index_t *visited, char* path)
+{
+    if(!context || !root) return;
+    for(int i = 0; i < depth; i++)
+    {
+        printf("   ");
+        info(1, "   ");
+    }
+    context->working_directory = root;
+    printf("%s\n", root->internal.file_name);
+    info(1, "%s\n", root->internal.file_name);
+    path = get_path_string(context);    
+    byte *contents = malloc(root->internal.file_size);
+    size_t n = 0;
+    inode_read_data(context->fs, root, 0, contents, root->internal.file_size, &n);
+    path = calloc(16, 1);
+    for(size_t i = 0; i < root->internal.file_size; i += 16) {
+        context->working_directory = root;
+        inode_index_t index = get_index(contents, i/16);
+        if(context->fs->inodes[index].internal.file_type == DIRECTORY && visited[index] == 0) {
+            // strcat(path, "/");
+            // strcat(path, context->fs->inodes[index].internal.file_name);
+            context->working_directory = &context->fs->inodes[index];
+            visited[index] = 1;
+            tree_dfs(context->working_directory, context, &context->fs->inodes[index], depth + 1, visited, path);
+        }
+        else if(context->fs->inodes[index].internal.file_type == DATA_FILE && visited[index] == 0) {
+            for(int i = 0; i < depth+1; i++)
+            {
+                printf("   ");
+                info(1, "   ");
+            }
+            printf("%s\n", context->fs->inodes[index].internal.file_name);
+            info(1, "%s\n", context->fs->inodes[index].internal.file_name);
+            visited[index] = 1;
+
+        }
+    }
+    context->working_directory = work_dir;
 }
 
 int tree(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
-    return -2;
+    if(!context || !path) return 0;
+    inode_t *working_dir = context->working_directory;
+    char *dupe = strdup(path);
+    int len_path = get_path_length(dupe);
+    char **file_path = split_string(dupe);
+    char *dest = file_path[len_path-1];
+    char *path_before_dest = get_path_before_dest(path);
+    fs_file_t parent_dir;
+    if(strcmp(path_before_dest, "") == 0)    
+    {
+        parent_dir = malloc(sizeof(struct fs_file));
+        if (!parent_dir) return -1;
+        parent_dir->fs = context->fs;
+        parent_dir->inode = context->working_directory;
+        parent_dir->offset = 0;
+    }
+    else
+    {
+        parent_dir = fs_open_dir(context, path_before_dest);
+    }
+    if(!parent_dir)
+    {
+        printf("Error: Directory not found\n");
+        return -1;
+    }
+    if(strcmp(dest, context->working_directory->internal.file_name) == 0)
+    {
+        printf("Error: Cannot change to current working directory\n");
+        return -1;
+    }
+    fs_file_t curr_dir = fs_open_dir(context, path);
+    if(curr_dir == NULL)
+    {
+        printf("Error: Object not found\n");
+        return -1;
+    }
+    if(curr_dir->inode->internal.file_type != DIRECTORY)
+    {
+        printf("%s\n", curr_dir->inode->internal.file_name);
+        return 0;
+    }
+
+
+
+    // run DFS on filesystem and dir
+
+    // printf("%s\n", curr_dir->inode->internal.file_name);
+    inode_index_t *visited = calloc(context->fs->inode_count*sizeof(inode_index_t), 1);
+    int prev_index;
+    if(strcmp(parent_dir->inode->internal.file_name, "root") == 0)
+        prev_index = 0;
+    else
+        prev_index = find_index_of(context, parent_dir->inode, path_before_dest, get_path_length(path_before_dest));
+    int curr_index = find_index_of(context, curr_dir->inode, path, len_path);
+    context->working_directory = curr_dir->inode;
+    visited[curr_index] = 1;
+    visited[prev_index] = 1;
+    tree_dfs(context->working_directory, context, curr_dir->inode, 0, visited, path);
+    context->working_directory = working_dir;
+    free(visited);
+    return 0;
 }
 
 //Part 2
@@ -587,7 +1231,6 @@ void new_terminal(filesystem_t *fs, terminal_context_t *term)
 
     //assign file system and root inode.
 }
-
 
 fs_file_t fs_open(terminal_context_t *context, char *path)
 {
@@ -758,4 +1401,3 @@ int fs_seek(fs_file_t file, seek_mode_t seek_mode, int offset)
     }
     return 0;
 }
-
