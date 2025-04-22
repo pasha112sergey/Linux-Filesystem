@@ -697,7 +697,6 @@ void debug_inode_blocks(filesystem_t *fs, inode_t *inode) {
     }
 }
 
-// Add these calls in your remove_directory function:
 // we can only delete a directory if it is empty!!
 void debug_parent_dir(filesystem_t *fs, inode_t *parent_inode) {
     info(1, "\n=== Parent Directory Debug Info ===\n");
@@ -705,7 +704,6 @@ void debug_parent_dir(filesystem_t *fs, inode_t *parent_inode) {
     info(1, "File type: %d\n", parent_inode->internal.file_type);
     info(1, "File name: %s\n", parent_inode->internal.file_name);
     
-    // Print directory entries
     byte *contents = malloc(parent_inode->internal.file_size);
     size_t size = parent_inode->internal.file_size;
     inode_read_data(fs, parent_inode, 0, contents, size, &size);
@@ -826,8 +824,6 @@ int remove_directory(terminal_context_t *context, char *path)
         inode_index_t index = get_index(contents, i/16);
         if(index == removed_index) 
         {
-            // Mark the entry as a tombstone
-
             debug_parent_dir(context->fs, parent_dir->inode);
 
             byte entry[16] = {0};
@@ -1021,54 +1017,6 @@ int list(terminal_context_t *context, char *path)
             }
         }
     }
-    // else{
-    //     for(size_t i = 0; i < file->inode->internal.file_size; i += 16)
-    //     {
-    //         inode_index_t index = get_index(contents, i/16);
-    //         char name[14] = {0};
-    //         strncpy(name, (char*)&contents[i + 2], 13);
-
-    //         if(context->fs->inodes[index].internal.file_type == DIRECTORY)
-    //         {
-    //             printf("d");
-    //             if(file->inode->internal.file_perms & FS_READ) printf("r");
-    //             else printf("-");
-    //             if(file->inode->internal.file_perms & FS_WRITE) printf("w");
-    //             else printf("-");
-    //             if(file->inode->internal.file_perms & FS_EXECUTE) printf("x");
-    //             else printf("-");
-    //         }
-    //         else
-    //         {
-    //             printf("f");
-    //             if(file->inode->internal.file_perms && FS_READ) printf("r");
-    //             else printf("-");
-    //             if(file->inode->internal.file_perms && FS_WRITE) printf("w");
-    //             else printf("-");
-    //             if(file->inode->internal.file_perms && FS_EXECUTE) printf("x");
-    //             else printf("-");
-    //         }
-
-    //         printf("\t%lu\t%s", file->inode->internal.file_size, name);
-    //         if(index == 0)
-    //         {
-    //             printf(" -> root\n");
-    //         }
-    //         if(strcmp(name, ".") == 0)
-    //         {
-    //             printf(" -> %s\n", name);
-    //         }
-    //         else if (strcmp(name, "..") == 0)
-    //         {
-    //             printf(" -> %s\n", file->inode->internal.file_name);
-    //         }
-    //         else
-    //         {
-    //             printf("\n");
-    //         }
-    //     }
-    // }
-
     return 0;
 }
 
@@ -1279,8 +1227,6 @@ fs_file_t fs_open(terminal_context_t *context, char *path)
             info(1, "Comparing '%s' (len=%zu) with '%s' (len=%zu)\n", 
             file_path[i], strlen(file_path[i]), 
             content_names[j], strlen(content_names[j]));
-         
-            // Use strncmp to compare only the actual string contents
             if(strcmp(file_path[i], content_names[j]) == 0) 
             {
                 found = 1;
